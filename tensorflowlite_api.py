@@ -20,11 +20,11 @@ from model_metric import load_index_class
 from draw_bbs import DrawBoundingBoxes
 
 import logging
+import logging.config
 
-logger = logging.getLogger("main")
-# logger.setLevel(logging.DEBUG)  root logger leval is higher than info
-# logging.StreamHandler(sys.stdout)
-# logger.setFileLevel(logging.INFO)
+logging.config.fileConfig('logging.conf')
+logger = logging.getLogger(__name__)
+logger.setLevel(logging.INFO)
 
 print(tf.__version__)
 
@@ -74,7 +74,8 @@ class TensorflowLiteAPI(object):
     def close(self):
         self.result_w.close()
 
-    def __write(self, output_dict, im_width, im_height):
+    def __write(self, output_dict):
+        im_width, im_height = output_dict['width'], output_dict['height']
         boxes = output_dict['detection_boxes']
         for i in range(output_dict['num_detections']):
             if output_dict['detection_scores'][i] >= self.score_threshold:
@@ -84,8 +85,8 @@ class TensorflowLiteAPI(object):
                                         int(ymin * im_height), int(ymax * im_height))
                 self.result_w.write("{},{},{},{},{},{},{},{},{:.4f},{}\n".format(
                     output_dict['filename'],
-                    output_dict['width'],
-                    output_dict['height'],
+                    im_width,
+                    im_height,
                     self.index2class[str(output_dict['detection_classes'][i] + 1)],
                     xmin,
                     ymin,
@@ -95,8 +96,9 @@ class TensorflowLiteAPI(object):
                     i))
 
     def run_tensorflowlite_inference_for_single_image(self, image):
+        cropped_image = image.resize((self.width, self.height))
         # add N dim
-        input_data = np.expand_dims(image, axis=0)
+        input_data = np.expand_dims(cropped_image, axis=0)
         # Test the model on random input data.
         if self.tf_ob_api_is_quantized:
             # input_data = np.array(np.random.random_sample(self.input_shape), dtype=np.uint8)
@@ -119,14 +121,20 @@ class TensorflowLiteAPI(object):
                        'num_detections': int(np.squeeze(self.interpreter.get_tensor(self.output_details[3]['index'])))}
 
         # all outputs are float32 numpy arrays, so convert types as appropriate
+        # deal with abnormal detection scores
+        src_detection_scores = output_dict['detection_scores']
+        # print(self.output_details)
+        # print(output_dict['detection_boxes'])
+        # print(src_detection_scores)
+        # test_ts = time.time()
+        output_dict['detection_scores'] = np.where(src_detection_scores > 1, 0, src_detection_scores)
+        # print(output_dict['detection_scores'])
+        # print('clip time: ', time.time() - test_ts)
 
-        print(self.output_details)
-        print(output_dict['detection_boxes'])
-        print(output_dict['detection_scores'])
-        print(output_dict['detection_classes'])
-        print(output_dict['num_detections'])
+        # print(output_dict['detection_classes'])
+        # print(output_dict['num_detections'])
 
-        print('time: {:.3f}ms'.format((stop_time - start_time) * 1000))
+        # print('time: {:.3f}ms'.format((stop_time - start_time) * 1000))
         return output_dict
 
     def detect(self, image_path, output):
@@ -137,7 +145,8 @@ class TensorflowLiteAPI(object):
         per_image_start = time.time()
         # Load image
         # keep a consistent pre_processing and inference
-        image = Image.open(image_path).resize((self.width, self.height))
+        # image = Image.open(image_path).resize((self.width, self.height))
+        image = Image.open(image_path)
         image_np = self.draw_obj.load_image_into_numpy_array_fixed(image)
 
         # the array based representation of the image will be used later in order to prepare the
@@ -168,5 +177,5 @@ class TensorflowLiteAPI(object):
         output_dict['filename'] = filename
         output_dict['height'], output_dict['width'], _ = image_np.shape
 
-        self.__write(output_dict, 300, 300)
+        self.__write(output_dict)
 
